@@ -8,7 +8,7 @@
 void executes (char *input){
     pid_t pid = fork();
     if (pid == 0){
-        execlp("/bin/sh", "sh", "-c", input, NULL);
+        execlp("/usr/bin/sh", "sh",  "-c", input, NULL);
         printf("execlp failed\n");
     }
     else{
@@ -18,9 +18,18 @@ void executes (char *input){
 
 int main() {
     char input[1028];
+    system("clear");
     while(1){
     printf("A\\>> ");
     fgets(input, sizeof(input), stdin);
     executes(input);
+    if(fgets(input, sizeof(input), stdin) == NULL){
+            break;
+    }
+    input[strcspn(input, "\n")] = 0;
+        
+    if (strcmp(input, "exit") == 0){
+            break;
+        }
 }
 }
