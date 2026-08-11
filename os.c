@@ -320,6 +320,7 @@ int main() {
     char *input;
     system("clear");
     signal(SIGINT, SIG_IGN); // Ctrl+C shouldn't kill the shell itself
+    gui(); // launch the graphical desktop automatically on every boot
     boot_menu();
 
     snprintf(histfile, sizeof(histfile), "%s/.os_history", home_dir());
