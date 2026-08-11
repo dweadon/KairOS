@@ -224,7 +224,7 @@ void gui(void){
     // binary), and without this it would re-run main()'s startup below,
     // launching another gui()/boot_menu() from inside the terminal it opened.
     setenv("KAIROS_SUBSHELL", "1", 1);
-    system("weston-terminal &");
+    system("weston-terminal --font=\"DejaVu Sans Mono\" --font-size=16 &");
 }
 
 #define MENU_ITEM_COUNT 5
@@ -327,7 +327,10 @@ int main() {
 
     while(1){
         getcwd(cwd, sizeof(cwd));
-        snprintf(prompt, sizeof(prompt), "@main~%s$ ", cwd);
+        // \001/\002 mark the color codes as non-printing so readline still
+        // tracks cursor position correctly (otherwise line-editing/redraw
+        // breaks once the visible prompt length no longer matches reality).
+        snprintf(prompt, sizeof(prompt), "@\001\x1b[32m\002main\001\x1b[0m\002~%s$ ", cwd);
 
     input = readline(prompt);
     if (input == NULL){ // Ctrl+D
