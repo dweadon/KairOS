@@ -220,6 +220,7 @@ void nav(void){
 void gui(void){
     mkdir("/tmp/xdg-runtime", 0700); // ok if it already exists
     setenv("XDG_RUNTIME_DIR", "/tmp/xdg-runtime", 1); // inherited by system()/execlp below
+    setenv("SHELL", "/usr/bin/os", 1); // weston-terminal launches $SHELL; default /bin/sh has no ai/nav/go
 
     printf("starting GUI (weston)...\r\n");
     fflush(stdout);
