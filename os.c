@@ -10,6 +10,8 @@
 #include <termios.h>    // raw terminal mode for arrow-key navigation
 #include <dirent.h>     // opendir/readdir — directory listing
 #include <sys/stat.h>   // stat — tell files from directories
+#include <sys/utsname.h> // uname — kernel name/version for fetch()
+#include <sys/sysinfo.h> // sysinfo — uptime/memory for fetch()
 
 
 char *home_dir(void){
@@ -227,6 +229,25 @@ void gui(void){
     system("weston-terminal --font=\"DejaVu Sans Mono\" --font-size=16 &");
 }
 
+void fetch(void){
+    struct utsname u;
+    uname(&u);
+    struct sysinfo si;
+    sysinfo(&si);
+
+    printf("\r\n");
+    printf("\x1b[93m        ,/\x1b[0m   \x1b[1mKairOS\x1b[0m\r\n");
+    printf("\x1b[93m       '\x1b[0m    ------\r\n");
+    printf("\x1b[93m              /\x1b[0m   Kernel: %s %s\r\n", u.sysname, u.release);
+    printf("\x1b[93m            /\x1b[0m    Uptime: %ld min\r\n", si.uptime / 60);
+    printf("\x1b[93m   o\x1b[0m               Memory: %lu/%lu MB\r\n",
+        (unsigned long)((si.totalram - si.freeram) * si.mem_unit / 1024 / 1024),
+        (unsigned long)(si.totalram * si.mem_unit / 1024 / 1024));
+    printf("\x1b[93m              ,-\x1b[0m   Shell:  /usr/bin/os\r\n");
+    printf("\x1b[93m              '-,\x1b[0m\r\n");
+    printf("\r\n");
+}
+
 #define MENU_ITEM_COUNT 5
 static const char *menu_items[MENU_ITEM_COUNT] = {"Shell", "GUI", "Filesystem", "Network", "About"};
 
@@ -356,6 +377,11 @@ int main() {
     }
     if (strcmp(input, "nav") == 0){
         nav();
+        free(input);
+        continue;
+    }
+    if (strcmp(input, "fetch") == 0){
+        fetch();
         free(input);
         continue;
     }
