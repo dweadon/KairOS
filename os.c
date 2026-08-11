@@ -7,6 +7,9 @@
 #include <signal.h>     // signal — control what Ctrl+C does
 #include <readline/readline.h> // readline — prompt with line editing
 #include <readline/history.h>  // add_history — up/down arrow recall
+#include <termios.h>    // raw terminal mode for arrow-key navigation
+#include <dirent.h>     // opendir/readdir — directory listing
+#include <sys/stat.h>   // stat — tell files from directories
 
 
 char *home_dir(void){
@@ -25,6 +28,261 @@ void go(char *input){
         perror("go");
     }
 }
+static void json_escape(const char *in, char *out, size_t outsz){
+    size_t j = 0;
+    for (size_t i = 0; in[i] && j + 2 < outsz; i++){
+        unsigned char c = in[i];
+        if (c == '"' || c == '\\'){
+            out[j++] = '\\';
+            out[j++] = c;
+        } else if (c == '\n'){
+            out[j++] = '\\';
+            out[j++] = 'n';
+        } else if (c >= 0x20){
+            out[j++] = c;
+        }
+    }
+    out[j] = '\0';
+}
+
+#define AI_MAX_TURNS 20   // sliding window of user+assistant messages kept in memory
+#define AI_MSG_MAXLEN 2048
+
+static char ai_history_role[AI_MAX_TURNS][10];
+static char ai_history_content[AI_MAX_TURNS][AI_MSG_MAXLEN];
+static int ai_history_count = 0;
+
+static void ai_history_add(const char *role, const char *content){
+    if (ai_history_count >= AI_MAX_TURNS){
+        for (int i = 1; i < AI_MAX_TURNS; i++){
+            strcpy(ai_history_role[i - 1], ai_history_role[i]);
+            strcpy(ai_history_content[i - 1], ai_history_content[i]);
+        }
+        ai_history_count = AI_MAX_TURNS - 1;
+    }
+    strncpy(ai_history_role[ai_history_count], role, sizeof(ai_history_role[0]) - 1);
+    ai_history_role[ai_history_count][sizeof(ai_history_role[0]) - 1] = '\0';
+    strncpy(ai_history_content[ai_history_count], content, AI_MSG_MAXLEN - 1);
+    ai_history_content[ai_history_count][AI_MSG_MAXLEN - 1] = '\0';
+    ai_history_count++;
+}
+
+void ai(char *input){
+    char *prompt = input + 2; // skip "ai"
+    while (*prompt == ' ') prompt++;
+    if (*prompt == '\0'){
+        printf("usage: ai <message>\n");
+        return;
+    }
+
+    char *key = getenv("GROQ_API_KEY");
+    if (!key){
+        printf("ai: set GROQ_API_KEY first\n");
+        return;
+    }
+
+    ai_history_add("user", prompt);
+
+    FILE *req = fopen("/tmp/ai_req.json", "w");
+    if (!req){ perror("ai"); return; }
+    fprintf(req, "{\"model\":\"llama-3.1-8b-instant\",\"max_tokens\":256,\"messages\":[");
+    for (int i = 0; i < ai_history_count; i++){
+        char esc[AI_MSG_MAXLEN];
+        json_escape(ai_history_content[i], esc, sizeof(esc));
+        fprintf(req, "%s{\"role\":\"%s\",\"content\":\"%s\"}", i ? "," : "", ai_history_role[i], esc);
+    }
+    fprintf(req, "]}");
+    fclose(req);
+
+    char cmd[700];
+    snprintf(cmd, sizeof(cmd),
+        "curl -s https://api.groq.com/openai/v1/chat/completions "
+        "-H \"content-type: application/json\" "
+        "-H \"Authorization: Bearer %s\" "
+        "-d @/tmp/ai_req.json -o /tmp/ai_resp.json",
+        key);
+    system(cmd);
+
+    FILE *resp = fopen("/tmp/ai_resp.json", "r");
+    if (!resp){ printf("ai: request failed\n"); return; }
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, resp);
+    buf[n] = '\0';
+    fclose(resp);
+
+    char *marker = strstr(buf, "\"content\":\"");
+    if (!marker){
+        printf("ai: %s\n", buf); // show the raw response (likely an error) if parsing fails
+        return;
+    }
+    marker += 11;
+    char *end = marker;
+    while (*end && !(*end == '"' && *(end - 1) != '\\')) end++;
+
+    char reply[AI_MSG_MAXLEN];
+    size_t ri = 0;
+    for (char *p = marker; p < end; p++){
+        if (*p == '\\' && p + 1 < end){
+            p++;
+            char c = (*p == 'n') ? '\n' : *p;
+            putchar(c);
+            if (ri + 1 < sizeof(reply)) reply[ri++] = c;
+        } else {
+            putchar(*p);
+            if (ri + 1 < sizeof(reply)) reply[ri++] = *p;
+        }
+    }
+    putchar('\n');
+    reply[ri] = '\0';
+
+    ai_history_add("assistant", reply);
+}
+
+#define NAV_MAX_ENTRIES 512
+#define NAV_NAME_LEN 256
+
+static int nav_cmp(const void *a, const void *b){
+    return strcmp((const char *)a, (const char *)b);
+}
+
+void nav(void){
+    struct termios orig, raw;
+    tcgetattr(STDIN_FILENO, &orig);
+    raw = orig;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+
+    static char names[NAV_MAX_ENTRIES][NAV_NAME_LEN];
+    int count = 0;
+    int sel = 0;
+
+    while (1){
+        count = 0;
+        DIR *d = opendir(".");
+        if (d){
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL && count < NAV_MAX_ENTRIES){
+                if (strcmp(de->d_name, ".") == 0) continue;
+                strncpy(names[count], de->d_name, NAV_NAME_LEN - 1);
+                names[count][NAV_NAME_LEN - 1] = '\0';
+                count++;
+            }
+            closedir(d);
+        }
+        qsort(names, count, NAV_NAME_LEN, nav_cmp);
+        if (sel >= count) sel = count > 0 ? count - 1 : 0;
+        if (sel < 0) sel = 0;
+
+        printf("\x1b[2J\x1b[H");
+        char cwd[1024];
+        getcwd(cwd, sizeof(cwd));
+        printf("nav: %s  (arrows to move, enter to open, q to quit)\r\n\r\n", cwd);
+        for (int i = 0; i < count; i++){
+            struct stat st;
+            int isdir = (stat(names[i], &st) == 0) && S_ISDIR(st.st_mode);
+            if (i == sel) printf("\x1b[7m");
+            printf("%s%s", names[i], isdir ? "/" : "");
+            if (i == sel) printf("\x1b[0m");
+            printf("\r\n");
+        }
+        fflush(stdout);
+
+        char c;
+        if (read(STDIN_FILENO, &c, 1) != 1) break;
+        if (c == 'q'){
+            break;
+        } else if (c == '\r' || c == '\n'){
+            if (count > 0){
+                struct stat st;
+                if (stat(names[sel], &st) == 0 && S_ISDIR(st.st_mode)){
+                    chdir(names[sel]);
+                    sel = 0;
+                }
+            }
+        } else if (c == 0x1b){
+            char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+            if (seq[0] == '['){
+                if (seq[1] == 'A'){ if (sel > 0) sel--; }
+                else if (seq[1] == 'B'){ if (sel < count - 1) sel++; }
+            }
+        }
+    }
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig);
+    printf("\x1b[2J\x1b[H");
+    fflush(stdout);
+}
+
+#define MENU_ITEM_COUNT 4
+static const char *menu_items[MENU_ITEM_COUNT] = {"Shell", "Filesystem", "Network", "About"};
+
+// shows on boot; returns once "Shell" is selected so main() can enter the prompt loop
+static void boot_menu(void){
+    struct termios orig, raw;
+    tcgetattr(STDIN_FILENO, &orig);
+    raw = orig;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+
+    int sel = 0;
+    while (1){
+        printf("\x1b[2J\x1b[H");
+        printf("KairOS\r\n\r\n");
+        for (int i = 0; i < MENU_ITEM_COUNT; i++){
+            if (i == sel) printf("\x1b[7m");
+            printf("%s", menu_items[i]);
+            if (i == sel) printf("\x1b[0m");
+            printf("\r\n");
+        }
+        printf("\r\n(arrows to move, enter to select)\r\n");
+        fflush(stdout);
+
+        char c;
+        if (read(STDIN_FILENO, &c, 1) != 1) break;
+        if (c == '\r' || c == '\n'){
+            if (sel == 0) break; // enter the shell
+
+            printf("\x1b[2J\x1b[H");
+            if (sel == 1){
+                printf("-- Filesystem --\r\n\r\n");
+                fflush(stdout);
+                system("df -h");
+            } else if (sel == 2){
+                printf("-- Network --\r\n\r\n");
+                fflush(stdout);
+                system("ip a");
+            } else if (sel == 3){
+                printf("-- About --\r\n\r\n");
+                fflush(stdout);
+                system("uname -a");
+                printf("KairOS -- a minimal shell-based OS\r\n");
+            }
+            printf("\r\npress any key to return to menu\r\n");
+            fflush(stdout);
+            char tmp;
+            read(STDIN_FILENO, &tmp, 1);
+        } else if (c == 0x1b){
+            char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) != 1) continue;
+            if (read(STDIN_FILENO, &seq[1], 1) != 1) continue;
+            if (seq[0] == '['){
+                if (seq[1] == 'A'){ if (sel > 0) sel--; }
+                else if (seq[1] == 'B'){ if (sel < MENU_ITEM_COUNT - 1) sel++; }
+            }
+        }
+    }
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &orig);
+    printf("\x1b[2J\x1b[H");
+    fflush(stdout);
+}
+
 void executes (char *input){
     pid_t pid = fork();
     if (pid == 0){
@@ -45,6 +303,7 @@ int main() {
     char *input;
     system("clear");
     signal(SIGINT, SIG_IGN); // Ctrl+C shouldn't kill the shell itself
+    boot_menu();
 
     snprintf(histfile, sizeof(histfile), "%s/.os_history", home_dir());
     read_history(histfile);
@@ -68,6 +327,21 @@ int main() {
         }
     if (strncmp(input, "go", 2) == 0){
         go(input);
+        free(input);
+        continue;
+    }
+    if (strncmp(input, "ai", 2) == 0){
+        ai(input);
+        free(input);
+        continue;
+    }
+    if (strcmp(input, "nav") == 0){
+        nav();
+        free(input);
+        continue;
+    }
+    if (strcmp(input, "menu") == 0){
+        boot_menu();
         free(input);
         continue;
     }
