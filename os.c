@@ -220,6 +220,10 @@ void gui(void){
     system("weston --socket=wayland-0 --idle-time=0 >/tmp/weston.log 2>&1 &");
     sleep(2); // give the compositor time to create its Wayland socket before the terminal connects
     setenv("WAYLAND_DISPLAY", "wayland-0", 1); // now safe: only affects weston-terminal below
+    // Mark child shells as nested: weston-terminal execs $SHELL (this same
+    // binary), and without this it would re-run main()'s startup below,
+    // launching another gui()/boot_menu() from inside the terminal it opened.
+    setenv("KAIROS_SUBSHELL", "1", 1);
     system("weston-terminal &");
 }
 
@@ -312,8 +316,10 @@ int main() {
     char *input;
     system("clear");
     signal(SIGINT, SIG_IGN); // Ctrl+C shouldn't kill the shell itself
-    gui(); // launch the graphical desktop automatically on every boot
-    boot_menu();
+    if (!getenv("KAIROS_SUBSHELL")){ // skip on nested shells (e.g. the gui terminal), see gui()
+        gui(); // launch the graphical desktop automatically on every boot
+        boot_menu();
+    }
 
     snprintf(histfile, sizeof(histfile), "%s/.os_history", home_dir());
     read_history(histfile);
