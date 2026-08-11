@@ -75,17 +75,11 @@ void ai(char *input){
         return;
     }
 
-    char *key = getenv("GROQ_API_KEY");
-    if (!key){
-        printf("ai: set GROQ_API_KEY first\n");
-        return;
-    }
-
     ai_history_add("user", prompt);
 
     FILE *req = fopen("/tmp/ai_req.json", "w");
     if (!req){ perror("ai"); return; }
-    fprintf(req, "{\"model\":\"llama-3.1-8b-instant\",\"max_tokens\":256,\"messages\":[");
+    fprintf(req, "{\"messages\":[");
     for (int i = 0; i < ai_history_count; i++){
         char esc[AI_MSG_MAXLEN];
         json_escape(ai_history_content[i], esc, sizeof(esc));
@@ -94,14 +88,11 @@ void ai(char *input){
     fprintf(req, "]}");
     fclose(req);
 
-    char cmd[700];
-    snprintf(cmd, sizeof(cmd),
-        "curl -s https://api.groq.com/openai/v1/chat/completions "
+    // Goes through a Cloudflare Worker proxy that holds the real Groq key
+    // server-side and rate-limits by IP, so no key ever ships in the OS.
+    system("curl -s https://kairos-ai-proxy.kairos-ai-proxy.workers.dev "
         "-H \"content-type: application/json\" "
-        "-H \"Authorization: Bearer %s\" "
-        "-d @/tmp/ai_req.json -o /tmp/ai_resp.json",
-        key);
-    system(cmd);
+        "-d @/tmp/ai_req.json -o /tmp/ai_resp.json");
 
     FILE *resp = fopen("/tmp/ai_resp.json", "r");
     if (!resp){ printf("ai: request failed\n"); return; }
