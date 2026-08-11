@@ -217,8 +217,22 @@ void nav(void){
     fflush(stdout);
 }
 
-#define MENU_ITEM_COUNT 4
-static const char *menu_items[MENU_ITEM_COUNT] = {"Shell", "Filesystem", "Network", "About"};
+void gui(void){
+    mkdir("/tmp/xdg-runtime", 0700); // ok if it already exists
+    setenv("XDG_RUNTIME_DIR", "/tmp/xdg-runtime", 1); // inherited by system()/execlp below
+
+    printf("starting GUI (weston)...\r\n");
+    fflush(stdout);
+    // WAYLAND_DISPLAY must stay unset here: if weston sees it already set, it
+    // assumes it should run nested inside another compositor instead of on DRM.
+    system("weston --socket=wayland-0 --idle-time=0 >/tmp/weston.log 2>&1 &");
+    sleep(2); // give the compositor time to create its Wayland socket before the terminal connects
+    setenv("WAYLAND_DISPLAY", "wayland-0", 1); // now safe: only affects weston-terminal below
+    system("weston-terminal &");
+}
+
+#define MENU_ITEM_COUNT 5
+static const char *menu_items[MENU_ITEM_COUNT] = {"Shell", "GUI", "Filesystem", "Network", "About"};
 
 // shows on boot; returns once "Shell" is selected so main() can enter the prompt loop
 static void boot_menu(void){
@@ -250,14 +264,17 @@ static void boot_menu(void){
 
             printf("\x1b[2J\x1b[H");
             if (sel == 1){
+                gui();
+                printf("GUI launched in the background (needs a real display, not a serial console).\r\n");
+            } else if (sel == 2){
                 printf("-- Filesystem --\r\n\r\n");
                 fflush(stdout);
                 system("df -h");
-            } else if (sel == 2){
+            } else if (sel == 3){
                 printf("-- Network --\r\n\r\n");
                 fflush(stdout);
                 system("ip a");
-            } else if (sel == 3){
+            } else if (sel == 4){
                 printf("-- About --\r\n\r\n");
                 fflush(stdout);
                 system("uname -a");
@@ -342,6 +359,11 @@ int main() {
     }
     if (strcmp(input, "menu") == 0){
         boot_menu();
+        free(input);
+        continue;
+    }
+    if (strcmp(input, "gui") == 0){
+        gui();
         free(input);
         continue;
     }
